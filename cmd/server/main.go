@@ -1,55 +1,44 @@
 package main
 
 import (
-    "os"
+	"log"
+	"net/http"
+	"os"
 
-    "github.com/flutter-webrtc/flutter-webrtc-server/pkg/logger"
-    "github.com/flutter-webrtc/flutter-webrtc-server/pkg/signaler"
-    "github.com/flutter-webrtc/flutter-webrtc-server/pkg/turn"
-    "github.com/flutter-webrtc/flutter-webrtc-server/pkg/websocket"
-    "gopkg.in/ini.v1"
+	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/logger"
+	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/sfu"
+	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/websocket"
 )
 
 func main() {
-    cfg, err := ini.Load("configs/config.ini")
-    if err != nil {
-        logger.Errorf("Fail to read config file: %v", err)
-        os.Exit(1)
-    }
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-    publicIP := cfg.Section("turn").Key("public_ip").String()
-    stunPort, err := cfg.Section("turn").Key("port").Int()
-    if err != nil {
-        stunPort = 3478
-    }
-    realm := cfg.Section("turn").Key("realm").String()
+	// Create a new SFU instance
+	s := sfu.NewSFU(sfu.Config{})
 
-    turnConfig := turn.DefaultConfig()
-    turnConfig.PublicIP = publicIP
-    turnConfig.Port = stunPort
-    turnConfig.Realm = realm
-    turnServer := turn.NewTurnServer(turnConfig)
+	// Create WebSocket server
+	wsServer := websocket.NewWebSocketServer(s)
 
-    signaler := signaler.NewSignaler(turnServer)
-    wsServer := websocket.NewWebSocketServer(signaler.HandleNewWebSocket, signaler.HandleTurnServerCredentials)
+	// Define HTTP mux
+	mux := http.NewServeMux()
 
-    cfgGen := cfg.Section("general")
-    sslCert := cfgGen.Key("cert").String()
-    sslKey := cfgGen.Key("key").String()
-    bindAddress := cfgGen.Key("bind").MustString("0.0.0.0")
-    port, err := cfgGen.Key("port").Int()
-    if err != nil {
-        port = 8080
-    }
-    htmlRoot := cfgGen.Key("html_root").MustString("./static")
+	// Register WebSocket handler
+	mux.HandleFunc("/ws", wsServer.ServeWebSocket)
 
-    serverConfig := websocket.DefaultConfig()
-    serverConfig.Host = bindAddress
-    serverConfig.Port = port
-    serverConfig.CertFile = sslCert
-    serverConfig.KeyFile = sslKey
-    serverConfig.HTMLRoot = htmlRoot
+	// Optionally add pprof or health check endpoints
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	})
 
-    // Only one Bind method: it runs TLS if cert/key provided, else HTTP
-    wsServer.Bind(serverConfig)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	logger.Infof("WebSocket server listening on :%s", port)
+	err := http.ListenAndServe(":"+port, mux)
+	if err != nil {
+		logger.Errorf("server error: %v", err)
+	}
 }
