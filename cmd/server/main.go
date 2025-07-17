@@ -3,54 +3,52 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
 
-	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/logger"
-	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/signaler"
-	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/turn"
-	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/websocket"
-	"gopkg.in/ini.v1"
+	"github.com/gorilla/websocket"
+	"os"
 )
 
-func main() {
-	cfg, err := ini.Load("configs/config.ini")
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		// السماح بأي origin (مهم لو شغال من Flutter أو Web)
+		return true
+	},
+}
+
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Println("🔌 اتصال WebSocket جديد")
+
+	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		logger.Errorf("failed to load config: %v", err)
-		os.Exit(1)
+		log.Println("❌ فشل الترقية:", err)
+		return
 	}
+	defer conn.Close()
 
-	// TURN server config (optional to include)
-	turnCfg := turn.DefaultConfig()
-	if ip := cfg.Section("turn").Key("public_ip").String(); ip != "" {
-		turnCfg.PublicIP = ip
+	for {
+		messageType, message, err := conn.ReadMessage()
+		if err != nil {
+			log.Println("❌ خطأ في قراءة الرسالة:", err)
+			break
+		}
+		log.Printf("📩 استلم: %s\n", message)
+
+		// إرسال نفس الرسالة كـ echo
+		if err := conn.WriteMessage(messageType, message); err != nil {
+			log.Println("❌ خطأ في الإرسال:", err)
+			break
+		}
 	}
-	turnCfg.Port = cfg.Section("turn").Key("port").MustInt(3478)
-	turnCfg.Realm = cfg.Section("turn").Key("realm").MustString("flutterwebrtc")
-	turnServer := turn.NewTurnServer(turnCfg)
+}
 
-	// Signaling
-	sig := signaler.NewSignaler(turnServer)
-	ws := websocket.NewWebSocketServer(sig.HandleNewWebSocket, sig.HandleTurnServerCredentials)
+func main() {
+	http.HandleFunc("/ws", handleWebSocket)
 
-	// WebSocket Handler
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		log.Println("New WS /ws request from", r.RemoteAddr)
-		ws.ServeHTTP(w, r)
-	})
-
-	// Optional health check
-	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(200)
-		w.Write([]byte("OK"))
-	})
-
+	// استخدام بورت من environment (Railway بتوفر PORT تلقائيًا)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = cfg.Section("general").Key("port").MustString("8080")
+		port = "8080"
 	}
-
-	logger.Infof("Listening on port %s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		logger.Errorf("server failed: %v", err)
-	}
+	log.Println("🚀 السيرفر شغال على البورت:", port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
