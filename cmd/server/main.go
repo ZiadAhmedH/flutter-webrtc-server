@@ -1,6 +1,8 @@
 package main
 
 import (
+	"log"
+	"net/http"
 	"os"
 
 	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/logger"
@@ -11,46 +13,44 @@ import (
 )
 
 func main() {
-
 	cfg, err := ini.Load("configs/config.ini")
 	if err != nil {
-		logger.Errorf("Fail to read file: %v", err)
+		logger.Errorf("failed to load config: %v", err)
 		os.Exit(1)
 	}
 
-	publicIP := cfg.Section("turn").Key("public_ip").String()
-	stunPort, err := cfg.Section("turn").Key("port").Int()
-	if err != nil {
-		stunPort = 3478
+	// TURN server config (optional to include)
+	turnCfg := turn.DefaultConfig()
+	if ip := cfg.Section("turn").Key("public_ip").String(); ip != "" {
+		turnCfg.PublicIP = ip
 	}
-	realm := cfg.Section("turn").Key("realm").String()
+	turnCfg.Port = cfg.Section("turn").Key("port").MustInt(3478)
+	turnCfg.Realm = cfg.Section("turn").Key("realm").MustString("flutterwebrtc")
+	turnServer := turn.NewTurnServer(turnCfg)
 
-	turnConfig := turn.DefaultConfig()
-	turnConfig.PublicIP = publicIP
-	turnConfig.Port = stunPort
-	turnConfig.Realm = realm
-	turn := turn.NewTurnServer(turnConfig)
+	// Signaling
+	sig := signaler.NewSignaler(turnServer)
+	ws := websocket.NewWebSocketServer(sig.HandleNewWebSocket, sig.HandleTurnServerCredentials)
 
-	signaler := signaler.NewSignaler(turn)
-	wsServer := websocket.NewWebSocketServer(signaler.HandleNewWebSocket, signaler.HandleTurnServerCredentials)
+	// WebSocket Handler
+	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		log.Println("New WS /ws request from", r.RemoteAddr)
+		ws.ServeHTTP(w, r)
+	})
 
-	sslCert := cfg.Section("general").Key("cert").String()
-	sslKey := cfg.Section("general").Key("key").String()
-	bindAddress := cfg.Section("general").Key("bind").String()
+	// Optional health check
+	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte("OK"))
+	})
 
-	port, err := cfg.Section("general").Key("port").Int()
-	if err != nil {
-		port = 8086
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = cfg.Section("general").Key("port").MustString("8080")
 	}
 
-	htmlRoot := cfg.Section("general").Key("html_root").String()
-
-	config := websocket.DefaultConfig()
-	config.Host = bindAddress
-	config.Port = port
-	config.CertFile = sslCert
-	config.KeyFile = sslKey
-	config.HTMLRoot = htmlRoot
-
-	wsServer.Bind(config)
+	logger.Infof("Listening on port %s", port)
+	if err := http.ListenAndServe(":"+port, nil); err != nil {
+		logger.Errorf("server failed: %v", err)
+	}
 }
