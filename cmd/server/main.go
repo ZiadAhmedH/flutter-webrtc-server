@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/logger"
-	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/sfu"
 	"github.com/flutter-webrtc/flutter-webrtc-server/pkg/websocket"
 )
 
