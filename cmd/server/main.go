@@ -1,29 +1,29 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/gorilla/websocket"
-	"os"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
-		// السماح بأي origin (مهم لو شغال من Flutter أو Web)
-		return true
+		return true // يسمح بأي origin
 	},
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	log.Println("🔌 اتصال WebSocket جديد")
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("❌ فشل الترقية:", err)
+		log.Println("فشل الترقية إلى WebSocket:", err)
 		return
 	}
 	defer conn.Close()
+
+	log.Println("✅ اتصال جديد عبر WebSocket")
 
 	for {
 		messageType, message, err := conn.ReadMessage()
@@ -31,24 +31,32 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			log.Println("❌ خطأ في قراءة الرسالة:", err)
 			break
 		}
-		log.Printf("📩 استلم: %s\n", message)
 
-		// إرسال نفس الرسالة كـ echo
-		if err := conn.WriteMessage(messageType, message); err != nil {
-			log.Println("❌ خطأ في الإرسال:", err)
+		log.Printf("📨 استلمنا: %s", message)
+
+		err = conn.WriteMessage(messageType, message)
+		if err != nil {
+			log.Println("❌ خطأ في إرسال الرسالة:", err)
 			break
 		}
 	}
 }
 
 func main() {
-	http.HandleFunc("/ws", handleWebSocket)
-
-	// استخدام بورت من environment (Railway بتوفر PORT تلقائيًا)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "8080" // fallback افتراضي
 	}
-	log.Println("🚀 السيرفر شغال على البورت:", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+
+	http.HandleFunc("/ws", handleWebSocket)
+
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "🌐 WebSocket server is running on /ws\n")
+	})
+
+	log.Printf("🚀 السيرفر شغال على البورت: %s", port)
+	err := http.ListenAndServe(":"+port, nil)
+	if err != nil {
+		log.Fatalf("❌ فشل في تشغيل السيرفر: %v", err)
+	}
 }
